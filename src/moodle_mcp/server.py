@@ -299,6 +299,71 @@ PROMPTS: list[Prompt] = [
             ),
         ],
     ),
+    Prompt(
+        name="explain-capability",
+        description="Explain a Moodle capability — what it grants, how to check, declaration template.",
+        arguments=[
+            PromptArgument(
+                name="capability",
+                description="Capability name, e.g. mod/quiz:attempt or local/foo:view.",
+                required=True,
+            ),
+        ],
+    ),
+    Prompt(
+        name="find-endpoint",
+        description="Find the Moodle WS / external function or REST endpoint for a given action (e.g. 'list quiz attempts').",
+        arguments=[
+            PromptArgument(
+                name="action",
+                description="Plain-English action, e.g. 'list quiz attempts for a user'.",
+                required=True,
+            ),
+            PromptArgument(
+                name="component",
+                description="Optional component scope, e.g. mod_quiz.",
+                required=False,
+            ),
+        ],
+    ),
+    Prompt(
+        name="explain-plugin-type",
+        description="Explain a Moodle plugin type — purpose, required files, common pitfalls.",
+        arguments=[
+            PromptArgument(
+                name="plugin_type",
+                description="Plugin type, e.g. qtype, mod, format, auth.",
+                required=True,
+            ),
+        ],
+    ),
+    Prompt(
+        name="xmldb-upgrade",
+        description="Generate an upgrade.php block for an XMLDB schema change.",
+        arguments=[
+            PromptArgument(
+                name="change",
+                description="Plain-English change, e.g. 'add column timecompleted to mdl_local_foo'.",
+                required=True,
+            ),
+            PromptArgument(
+                name="version",
+                description="Target $plugin->version integer, e.g. 2026010100.",
+                required=False,
+            ),
+        ],
+    ),
+    Prompt(
+        name="diagnose-mdl",
+        description="Triage a tracker.moodle.org issue (MDL-XXXXX) — summary, status, fix versions, workaround hints.",
+        arguments=[
+            PromptArgument(
+                name="issue_key",
+                description="Tracker issue key, e.g. MDL-12345.",
+                required=True,
+            ),
+        ],
+    ),
 ]
 
 
@@ -477,6 +542,62 @@ def build_server() -> tuple[Server, MoodleDocs]:
                 "Use get_hooks_api_listeners to find the matching hook class, "
                 "then show the new db/hooks.php registration and the listener "
                 "method signature."
+            )
+        elif name == "explain-capability":
+            cap = args.get("capability", "")
+            text = (
+                f"Explain the Moodle capability `{cap}`. Cover: (1) what it "
+                "grants, (2) which contexts it applies to, (3) the default "
+                "role assignments, (4) any RISK_* flags it typically carries, "
+                "(5) a db/access.php declaration template, and (6) the correct "
+                "has_capability/require_capability check at the call site. Use "
+                "get_capability_docs and search_moodle_docs to ground each "
+                "claim; cite the moodledev.io page."
+            )
+        elif name == "find-endpoint":
+            action = args.get("action", "")
+            component = args.get("component") or ""
+            scope = f" (scope: `{component}`)" if component else ""
+            text = (
+                f"Find the Moodle endpoint that performs: **{action}**{scope}. "
+                "Steps: (1) search_moodle_docs for the action and component, "
+                "(2) if MOODLE_URL+MOODLE_TOKEN are set, call list_ws_functions "
+                "and filter by name pattern, (3) check the external (WS) API "
+                "docs at docs/apis/core/external for the function signature. "
+                "Report: function name, required params, return shape, since-"
+                "version, and an example invocation via call_ws_function."
+            )
+        elif name == "explain-plugin-type":
+            ptype = args.get("plugin_type", "")
+            text = (
+                f"Explain the Moodle plugin type `{ptype}`. Cover: (1) what "
+                "this plugin type does, (2) directory layout under the Moodle "
+                "tree, (3) required files (version.php, language pack, "
+                "callbacks), (4) the canonical interface or base class to "
+                "extend, (5) common pitfalls and gotchas. Use list_plugin_types "
+                "and search_moodle_docs; cite the plugintypes/* page."
+            )
+        elif name == "xmldb-upgrade":
+            change = args.get("change", "")
+            version = args.get("version") or "<next-version>"
+            text = (
+                f"Write the `db/upgrade.php` block needed for: **{change}**. "
+                f"Target $plugin->version: `{version}`. Show: (1) the "
+                "`if ($oldversion < {version})` guard, (2) the XMLDB editor "
+                "operations ($dbman->add_field / rename_table / etc.), (3) the "
+                "upgrade_plugin_savepoint call, (4) the matching db/install.xml "
+                "delta. Use lookup_db_xmldb to confirm field types and "
+                "search_moodle_docs for upgrade conventions. Cite each rule."
+            )
+        elif name == "diagnose-mdl":
+            key = args.get("issue_key", "")
+            text = (
+                f"Triage tracker issue `{key}`. Steps: (1) call search_tracker "
+                f"with the key to fetch summary/status/resolution/fix versions, "
+                "(2) summarize whether it's open, fixed, won't-fix, or "
+                "duplicate, (3) if fixed, list the fix version(s) and whether "
+                "they're released, (4) if open, suggest a workaround based on "
+                "the summary and related docs. Link the tracker URL."
             )
         else:
             raise ValueError(f"Unknown prompt: {name}")

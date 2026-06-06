@@ -43,6 +43,11 @@ def test_prompts_have_required_args() -> None:
     assert "moodle-plugin-skeleton" in names
     assert "moodle-capability-review" in names
     assert "moodle-hooks-migration" in names
+    assert "explain-capability" in names
+    assert "find-endpoint" in names
+    assert "explain-plugin-type" in names
+    assert "xmldb-upgrade" in names
+    assert "diagnose-mdl" in names
 
 
 def test_curated_resources_well_formed() -> None:

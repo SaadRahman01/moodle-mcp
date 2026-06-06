@@ -25,7 +25,7 @@ Ten MCP tools, hardened to survive site redesigns:
 | `list_ws_functions()` | List Moodle Web Services functions available to the configured instance token. Requires `MOODLE_URL` + `MOODLE_TOKEN`. |
 | `call_ws_function(function, args)` | Invoke a Moodle WS function against a real instance. SSRF-guarded, function-name allowlisted, refuses private/loopback hosts unless explicitly overridden. |
 
-Plus MCP **resources** (`moodle://docs/apis/...` for one-click page reads), **prompts** for plugin scaffolding, capability review, and hooks migration, **tool annotations** (`readOnlyHint`, `destructiveHint`) for client safety, and **progress notifications** during multi-fetch searches.
+Plus MCP **resources** (`moodle://docs/apis/...` for one-click page reads), **prompts** (`moodle-plugin-skeleton`, `moodle-capability-review`, `moodle-hooks-migration`, `explain-capability`, `find-endpoint`, `explain-plugin-type`, `xmldb-upgrade`, `diagnose-mdl`), **tool annotations** (`readOnlyHint`, `destructiveHint`) for client safety, and **progress notifications** during multi-fetch searches.
 
 No API keys required for docs. Pulls the public sitemap, caches it on disk (`~/.cache/moodle-mcp/`), scores against your query, fetches top pages concurrently with retry + conditional GET + `Retry-After` header respect.
 
