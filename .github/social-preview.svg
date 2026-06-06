@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="orange" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#F98012"/>
+      <stop offset="100%" stop-color="#FFB347"/>
+    </linearGradient>
+    <linearGradient id="connector" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#F98012"/>
+      <stop offset="100%" stop-color="#7C4DFF"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#F98012"/>
+      <stop offset="100%" stop-color="#7C4DFF"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+
+  <!-- subtle grid -->
+  <g opacity="0.05" stroke="#ffffff" stroke-width="1">
+    <path d="M0 80 H1280 M0 160 H1280 M0 240 H1280 M0 320 H1280 M0 400 H1280 M0 480 H1280 M0 560 H1280"/>
+    <path d="M80 0 V640 M160 0 V640 M240 0 V640 M320 0 V640 M400 0 V640 M480 0 V640 M560 0 V640 M640 0 V640 M720 0 V640 M800 0 V640 M880 0 V640 M960 0 V640 M1040 0 V640 M1120 0 V640 M1200 0 V640"/>
+  </g>
+
+  <!-- Glyph row centered around y=180 -->
+  <!-- Moodle disc -->
+  <g transform="translate(380 100)" filter="url(#glow)">
+    <circle cx="80" cy="80" r="80" fill="url(#orange)"/>
+    <path d="M30 122 V52 Q30 36 46 36 Q60 36 68 50 L80 70 L92 50 Q100 36 114 36 Q130 36 130 52 V122 H112 V62 L88 102 H72 L48 62 V122 Z"
+          fill="#0d1117"/>
+  </g>
+
+  <!-- Connector arrow -->
+  <g transform="translate(560 170)" stroke="url(#connector)" stroke-width="8"
+     fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="0" y1="10" x2="150" y2="10"/>
+    <polyline points="125,-15 155,10 125,35"/>
+  </g>
+
+  <!-- MCP hex -->
+  <g transform="translate(740 100)" filter="url(#glow)">
+    <polygon points="80,0 152,42 152,122 80,164 8,122 8,42"
+             fill="#161b22" stroke="#7C4DFF" stroke-width="6"/>
+    <text x="80" y="100" text-anchor="middle"
+          font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif"
+          font-size="48" font-weight="800" fill="#ffffff">MCP</text>
+  </g>
+
+  <!-- Title -->
+  <text x="640" y="370" text-anchor="middle"
+        font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="96" font-weight="800" fill="#ffffff"
+        letter-spacing="-2">moodle-mcp</text>
+
+  <!-- Accent underline -->
+  <rect x="540" y="390" width="200" height="6" fill="url(#accent)" rx="3"/>
+
+  <!-- Tagline -->
+  <text x="640" y="470" text-anchor="middle"
+        font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="34" font-weight="600" fill="#e6edf3">
+    Moodle docs in your AI assistant.
+  </text>
+
+  <!-- Feature row -->
+  <text x="640" y="525" text-anchor="middle"
+        font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="24" font-weight="500" fill="#8b949e">
+    Search · Hooks · Capabilities · XMLDB · Plugin types · Tracker
+  </text>
+
+  <!-- Footer URL -->
+  <text x="640" y="600" text-anchor="middle"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="22" fill="#6e7681">
+    github.com/SaadRahman01/moodle-mcp
+  </text>
+</svg>
