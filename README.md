@@ -10,22 +10,35 @@ Companion to [`claude-moodle-dev`](https://github.com/SaadRahman01/claude-moodle
 
 ## What you get
 
-Eight MCP tools, hardened to survive site redesigns:
+Ten MCP tools, hardened to survive site redesigns:
 
 | Tool | Purpose |
 |------|---------|
-| `search_moodle_docs(query, limit=5, offset=0)` | Search `moodledev.io`. Synonym expansion (`cap`→`capability`, `ws`→`webservice`, `hook`↔`listener`), quoted-phrase boost, BM25 scoring, pagination. |
-| `fetch_moodle_page(url)` | Pull a single page in full — body text + headings — for follow-up after a search. |
+| `search_moodle_docs(query, limit=5, offset=0, version?)` | Search `moodledev.io`. Synonym expansion, quoted-phrase boost, BM25 + trigram-cosine rerank, pagination, optional version filter (`4.4`, `4.5`, …). Optional Algolia DocSearch fast-path. |
+| `fetch_moodle_page(url)` | Pull a single page in full — body text + headings. Rejects off-host URLs, non-http schemes, and path traversal. |
 | `get_hooks_api_listeners()` | Surface the core Hooks API index + detected hook classes. |
 | `get_capability_docs(component?)` | Access API lookup with a `RISK_*` quick-reference card; optional component scope. |
 | `lookup_db_xmldb(query)` | Focused XMLDB / database schema search. |
 | `list_plugin_types()` | Table of every Moodle plugin type with one-line hints + docs URL. |
 | `get_version_info()` | Current Moodle versions parsed from `/general/releases`. |
-| `search_tracker(query, limit=5)` | Issue search against `tracker.moodle.org` (Jira). |
+| `search_tracker(query, limit=5, affects_version?, fix_version?)` | Issue search against `tracker.moodle.org` (Jira), now with version filters. |
+| `list_ws_functions()` | List Moodle Web Services functions available to the configured instance token. Requires `MOODLE_URL` + `MOODLE_TOKEN`. |
+| `call_ws_function(function, args)` | Invoke a Moodle WS function against a real instance. SSRF-guarded, function-name allowlisted, refuses private/loopback hosts unless explicitly overridden. |
 
-Plus MCP **resources** (`moodle://docs/apis/...` for one-click page reads) and **prompts** for plugin scaffolding, capability review, and hooks migration.
+Plus MCP **resources** (`moodle://docs/apis/...` for one-click page reads), **prompts** for plugin scaffolding, capability review, and hooks migration, **tool annotations** (`readOnlyHint`, `destructiveHint`) for client safety, and **progress notifications** during multi-fetch searches.
 
-No API keys. No third-party search service. Pulls the public sitemap, caches it on disk (`~/.cache/moodle-mcp/`), scores against your query, fetches top pages concurrently with retry + conditional GET.
+No API keys required for docs. Pulls the public sitemap, caches it on disk (`~/.cache/moodle-mcp/`), scores against your query, fetches top pages concurrently with retry + conditional GET + `Retry-After` header respect.
+
+### Optional environment variables
+
+| Variable | Purpose |
+|----------|---------|
+| `MOODLE_URL` | Base URL of a real Moodle instance (https). Enables WS tools. |
+| `MOODLE_TOKEN` | WS token for that instance. |
+| `MOODLE_WS_ALLOW_INSECURE` | Set to `1` to permit `http://` or private/loopback hosts (local dev only). |
+| `MOODLE_DOCS_ALGOLIA_APP_ID` | Algolia DocSearch app ID. Enables higher-precision recall over sitemap BM25. |
+| `MOODLE_DOCS_ALGOLIA_API_KEY` | Algolia public search key. |
+| `MOODLE_DOCS_ALGOLIA_INDEX` | Index name (default: `moodledev`). |
 
 ## CLI
 

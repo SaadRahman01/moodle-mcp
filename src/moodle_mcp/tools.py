@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
+from . import ws
+from .config import BASE_URL, MAX_QUERY_LEN, RELEASES_URL, TRACKER_SEARCH
 from .docs import (
-    BASE_URL,
     DocHit,
     MoodleDocs,
     extract_page,
@@ -20,15 +22,25 @@ from .docs import (
     hits_to_dicts,
 )
 
-# ---- search_moodle_docs (existing) ----
+# ---- search_moodle_docs ----
 
 async def tool_search_docs(
-    docs: MoodleDocs, query: str, limit: int = 5, offset: int = 0,
+    docs: MoodleDocs,
+    query: str,
+    limit: int = 5,
+    offset: int = 0,
+    version: str | None = None,
 ) -> dict[str, Any]:
-    hits = await docs.search(query, limit=limit, offset=offset)
+    query = (query or "")[:MAX_QUERY_LEN]
+    hits = await docs.search(query, limit=limit, offset=offset, version=version)
     return {
         "markdown": format_results(hits),
-        "data": {"hits": hits_to_dicts(hits), "offset": offset, "limit": limit},
+        "data": {
+            "hits": hits_to_dicts(hits),
+            "offset": offset,
+            "limit": limit,
+            "version": version,
+        },
     }
 
 
@@ -38,23 +50,44 @@ _MD_LINK_RE = re.compile(r"<a[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>", re.IGNORECA
 _CODE_BLOCK_RE = re.compile(r"<pre[^>]*>(.*?)</pre>", re.IGNORECASE | re.DOTALL)
 
 
-async def tool_fetch_page(docs: MoodleDocs, url: str) -> dict[str, Any]:
+def _normalize_doc_url(url: str) -> tuple[str, str | None]:
+    """Return (normalized_url, error_code).
+
+    Rejects non-moodledev.io hosts, non-http(s) schemes, and path traversal.
+    """
+    if not url:
+        return "", "empty-url"
     if not url.startswith("http"):
         url = BASE_URL.rstrip("/") + "/" + url.lstrip("/")
-    if not url.startswith(BASE_URL):
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return url, "bad-scheme"
+    if parsed.hostname not in {"moodledev.io", "www.moodledev.io"}:
+        return url, "out-of-scope-host"
+    # Reject path traversal — Docusaurus URLs are simple, no '..' segments.
+    if ".." in parsed.path.split("/"):
+        return url, "path-traversal"
+    # Drop fragments and reassemble.
+    cleaned = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", parsed.query, ""))
+    return cleaned, None
+
+
+async def tool_fetch_page(docs: MoodleDocs, url: str) -> dict[str, Any]:
+    normalized, err = _normalize_doc_url(url)
+    if err:
         return {
-            "markdown": f"Error: URL must be on {BASE_URL}.",
-            "data": {"error": "out-of-scope-host", "url": url},
+            "markdown": f"Error: {err} ({url}).",
+            "data": {"error": err, "url": url},
         }
     try:
-        html = await docs.fetch_full(url)
+        html = await docs.fetch_full(normalized)
     except httpx.HTTPError as e:
         return {
-            "markdown": f"Error fetching {url}: {e}",
-            "data": {"error": str(e), "url": url},
+            "markdown": f"Error fetching {normalized}: {e}",
+            "data": {"error": str(e), "url": normalized},
         }
     title, excerpt, headings = extract_page(html, excerpt_len=8000)
-    md_lines = [f"# {title or url}", "", url, ""]
+    md_lines = [f"# {title or normalized}", "", normalized, ""]
     if headings:
         md_lines.append("## Sections")
         for h in headings:
@@ -64,7 +97,7 @@ async def tool_fetch_page(docs: MoodleDocs, url: str) -> dict[str, Any]:
     return {
         "markdown": "\n".join(md_lines).rstrip(),
         "data": {
-            "url": url,
+            "url": normalized,
             "title": title,
             "headings": list(headings),
             "body": excerpt,
@@ -226,15 +259,14 @@ _VERSION_RE = re.compile(
     r"Moodle\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)(?:[^A-Za-z0-9]+(LTS))?",
     re.IGNORECASE,
 )
-_RELEASES_URL = f"{BASE_URL}/general/releases"
 
 
 async def tool_version_info(docs: MoodleDocs) -> dict[str, Any]:
     try:
-        html = await docs.fetch_full(_RELEASES_URL)
+        html = await docs.fetch_full(RELEASES_URL)
     except httpx.HTTPError as e:
         return {
-            "markdown": f"Could not reach {_RELEASES_URL}: {e}",
+            "markdown": f"Could not reach {RELEASES_URL}: {e}",
             "data": {"error": str(e)},
         }
     _, excerpt, headings = extract_page(html, excerpt_len=8000)
@@ -255,22 +287,29 @@ async def tool_version_info(docs: MoodleDocs) -> dict[str, Any]:
         for v in versions:
             md.append(f"| {v['version']} | {'yes' if v['lts'] else ''} |")
     else:
-        md.append("No version strings parsed — open the page directly: " + _RELEASES_URL)
-    return {"markdown": "\n".join(md), "data": {"versions": versions, "source": _RELEASES_URL}}
+        md.append("No version strings parsed — open the page directly: " + RELEASES_URL)
+    return {"markdown": "\n".join(md), "data": {"versions": versions, "source": RELEASES_URL}}
 
 
 # ---- search_tracker ----
 
-TRACKER_SEARCH = "https://tracker.moodle.org/rest/api/2/search"
-
-
 async def tool_search_tracker(
-    docs: MoodleDocs, query: str, limit: int = 5,
+    docs: MoodleDocs,
+    query: str,
+    limit: int = 5,
+    affects_version: str | None = None,
+    fix_version: str | None = None,
 ) -> dict[str, Any]:
     assert docs._client is not None
+    query = (query or "")[:MAX_QUERY_LEN]
+    jql_parts = [f'text ~ "{query}"']
+    if affects_version:
+        jql_parts.append(f'affectedVersion = "{affects_version}"')
+    if fix_version:
+        jql_parts.append(f'fixVersion = "{fix_version}"')
     params = {
-        "jql": f'text ~ "{query}" ORDER BY updated DESC',
-        "fields": "summary,status,resolution,components,updated",
+        "jql": " AND ".join(jql_parts) + " ORDER BY updated DESC",
+        "fields": "summary,status,resolution,components,updated,versions,fixVersions",
         "maxResults": str(min(max(limit, 1), 25)),
     }
     try:
@@ -293,19 +332,105 @@ async def tool_search_tracker(
             "status": (f.get("status") or {}).get("name"),
             "resolution": (f.get("resolution") or {}).get("name"),
             "updated": f.get("updated"),
+            "affects_versions": [v.get("name") for v in (f.get("versions") or [])],
+            "fix_versions": [v.get("name") for v in (f.get("fixVersions") or [])],
         })
     if not rows:
         return {
             "markdown": f"No tracker results for `{query}`.",
-            "data": {"issues": []},
+            "data": {"issues": [], "truncated": False},
         }
     md = [f"# tracker.moodle.org results for `{query}`", ""]
     for r in rows:
         md.append(f"### {r['key']} — {r['summary']}")
         md.append(r["url"])
-        md.append(f"Status: {r['status']} · Resolution: {r['resolution'] or '—'} · Updated: {r['updated']}")
+        md.append(
+            f"Status: {r['status']} · Resolution: {r['resolution'] or '—'} · "
+            f"Updated: {r['updated']}"
+        )
+        if r["fix_versions"]:
+            md.append(f"Fix versions: {', '.join(r['fix_versions'])}")
         md.append("")
-    return {"markdown": "\n".join(md).rstrip(), "data": {"issues": rows}}
+    truncated = len(rows) >= int(params["maxResults"])
+    return {
+        "markdown": "\n".join(md).rstrip(),
+        "data": {"issues": rows, "truncated": truncated},
+    }
+
+
+# ---- Moodle Web Services tools (opt-in via MOODLE_URL + MOODLE_TOKEN) ----
+
+async def tool_list_ws_functions(docs: MoodleDocs) -> dict[str, Any]:
+    if not ws.configured():
+        return {
+            "markdown": (
+                "Moodle WS not configured. Set `MOODLE_URL` and `MOODLE_TOKEN` "
+                "environment variables to enable."
+            ),
+            "data": {"error": "not-configured"},
+        }
+    assert docs._client is not None
+    try:
+        functions = await ws.list_functions(docs._client)
+    except (ws.WSConfigError, ws.WSCallError) as e:
+        return {
+            "markdown": f"WS error: {e}",
+            "data": {"error": str(e)},
+        }
+    if not functions:
+        return {
+            "markdown": "No WS functions returned for this token.",
+            "data": {"functions": []},
+        }
+    md = ["# Moodle WS functions available to this token", ""]
+    md.append(f"Total: **{len(functions)}**")
+    md.append("")
+    md.append("| Function | Version |")
+    md.append("| --- | --- |")
+    for fn in functions[:200]:
+        name = fn.get("name") or "?"
+        version = fn.get("version") or ""
+        md.append(f"| `{name}` | {version} |")
+    if len(functions) > 200:
+        md.append(f"\n_(showing first 200 of {len(functions)})_")
+    return {"markdown": "\n".join(md), "data": {"functions": functions}}
+
+
+async def tool_call_ws_function(
+    docs: MoodleDocs, function: str, args: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not ws.configured():
+        return {
+            "markdown": (
+                "Moodle WS not configured. Set `MOODLE_URL` and `MOODLE_TOKEN` "
+                "environment variables to enable."
+            ),
+            "data": {"error": "not-configured"},
+        }
+    assert docs._client is not None
+    try:
+        payload = await ws.call(docs._client, function, args or {})
+    except (ws.WSConfigError, ws.WSCallError) as e:
+        return {
+            "markdown": f"WS call `{function}` failed: {e}",
+            "data": {"error": str(e), "function": function},
+        }
+    summary = _summarize_ws_payload(payload)
+    return {
+        "markdown": f"# `{function}` result\n\n{summary}",
+        "data": {"function": function, "result": payload},
+    }
+
+
+def _summarize_ws_payload(payload: Any) -> str:
+    if payload is None:
+        return "_null_"
+    if isinstance(payload, list):
+        return f"List of {len(payload)} item(s)."
+    if isinstance(payload, dict):
+        keys = ", ".join(f"`{k}`" for k in list(payload.keys())[:12])
+        return f"Object with keys: {keys}"
+    return f"Scalar: `{payload}`"
 
 
 __all__ = [
@@ -318,4 +443,6 @@ __all__ = [
     "tool_plugin_types",
     "tool_version_info",
     "tool_search_tracker",
+    "tool_list_ws_functions",
+    "tool_call_ws_function",
 ]

@@ -3,10 +3,13 @@
 Strategy:
   1. Pull the sitemap (and child sitemaps if it is a sitemap-index) from
      moodledev.io, cache on disk with a 24h TTL.
-  2. Score URLs against the query using slug + title overlap with a small
-     BM25-style boost, synonym expansion, and phrase-match bonus.
-  3. For the top N candidates, fetch pages concurrently and extract a short
-     excerpt + headings via regex (no BeautifulSoup dependency).
+  2. If Algolia DocSearch credentials are configured, use that for the
+     primary recall pass; otherwise score URLs against the query using
+     slug + title BM25 with synonym expansion.
+  3. For top-N candidates, fetch pages concurrently, extract excerpt +
+     headings, then apply a dependency-free trigram-cosine reranker.
+  4. Respect Retry-After headers on 429/503 — retry with the server's
+     suggested delay rather than blind exponential backoff.
 
 Designed to stay correct even if moodledev.io changes layout: only requires
 the sitemap and basic HTML to remain accessible.
@@ -14,8 +17,10 @@ the sitemap and basic HTML to remain accessible.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import re
+import time
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -23,17 +28,22 @@ from urllib.parse import urlparse
 
 import httpx
 
+from . import algolia
 from .cache import DiskCache
+from .config import (
+    DEFAULT_TIMEOUT,
+    EXCERPT_LEN,
+    MAX_CONCURRENT_FETCHES,
+    MAX_QUERY_LEN,
+    MAX_RETRIES,
+    PAGE_TTL,
+    SITEMAP_TTL,
+    SITEMAP_URL,
+    USER_AGENT,
+)
+from .rerank import rerank_score
 
-SITEMAP_URL = "https://moodledev.io/sitemap.xml"
-BASE_URL = "https://moodledev.io"
-USER_AGENT = "moodle-mcp/0.2 (+https://github.com/SaadRahman01/moodle-mcp)"
-DEFAULT_TIMEOUT = 15.0
-EXCERPT_LEN = 320
-PAGE_TTL = 7 * 86400.0
-SITEMAP_TTL = 86400.0
-MAX_CONCURRENT_FETCHES = 6
-MAX_RETRIES = 3
+log = logging.getLogger("moodle_mcp.docs")
 
 SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
@@ -68,6 +78,7 @@ SYNONYMS: dict[str, list[str]] = {
 }
 
 PHRASE_RE = re.compile(r'"([^"]+)"')
+_VERSION_PATH_RE = re.compile(r"/(\d+\.\d+)(?:/|$)")
 
 
 @dataclass(frozen=True)
@@ -159,6 +170,20 @@ def _bm25_score(query_tokens: list[str], doc_tokens: list[str], idx: PageIndex,
     return score
 
 
+def _url_version(url: str) -> str | None:
+    """Return version segment (e.g. '4.4') if URL is version-scoped, else None."""
+    m = _VERSION_PATH_RE.search(urlparse(url).path)
+    return m.group(1) if m else None
+
+
+def _matches_version(url: str, want: str | None) -> bool:
+    if not want:
+        return True
+    v = _url_version(url)
+    # Pages without a version segment are considered version-agnostic.
+    return v is None or v == want
+
+
 class MoodleDocs:
     """Sitemap-backed search with disk + memory caching, concurrent fetches."""
 
@@ -204,6 +229,7 @@ class MoodleDocs:
             if cached.last_modified:
                 headers["If-Modified-Since"] = cached.last_modified
         last_err: Exception | None = None
+        t0 = time.monotonic()
         for attempt in range(MAX_RETRIES):
             try:
                 async with self._fetch_sem:
@@ -213,7 +239,20 @@ class MoodleDocs:
                         url, cached.body,
                         etag=cached.etag, last_modified=cached.last_modified,
                     )
+                    log.debug("fetch 304 %s in %.0fms", url, (time.monotonic() - t0) * 1000)
                     return cached.body
+                if resp.status_code in (429, 503):
+                    delay = _parse_retry_after(resp.headers.get("Retry-After"))
+                    if delay is None:
+                        delay = 0.5 * (2 ** attempt)
+                    log.warning(
+                        "fetch %s got %d, sleeping %.1fs (attempt %d)",
+                        url, resp.status_code, delay, attempt + 1,
+                    )
+                    if attempt < MAX_RETRIES - 1:
+                        await asyncio.sleep(delay)
+                        continue
+                    resp.raise_for_status()
                 resp.raise_for_status()
                 body = resp.text
                 self._cache.set(
@@ -221,12 +260,17 @@ class MoodleDocs:
                     etag=resp.headers.get("ETag"),
                     last_modified=resp.headers.get("Last-Modified"),
                 )
+                log.debug(
+                    "fetch 200 %s in %.0fms (%d bytes)",
+                    url, (time.monotonic() - t0) * 1000, len(body),
+                )
                 return body
             except (httpx.HTTPError, httpx.TimeoutException) as e:
                 last_err = e
                 if attempt < MAX_RETRIES - 1:
                     await asyncio.sleep(0.5 * (2 ** attempt))
         if cached is not None:
+            log.warning("fetch %s failed, serving stale cache (%s)", url, last_err)
             return cached.body
         raise last_err if last_err else RuntimeError(f"Failed to fetch {url}")
 
@@ -269,13 +313,17 @@ class MoodleDocs:
                 idx.df[t] = idx.df.get(t, 0) + 1
         return idx
 
-    def _candidates(self, qtok: list[str], limit: int) -> list[tuple[float, str]]:
+    def _candidates(
+        self, qtok: list[str], limit: int, version: str | None,
+    ) -> list[tuple[float, str]]:
         urls = self._urls or []
         if self._index is None:
             self._index = self._build_index(urls)
         idx = self._index
         scored: list[tuple[float, str]] = []
         for u in urls:
+            if not _matches_version(u, version):
+                continue
             doc_toks = idx.by_url.get(u, _slug_tokens(u))
             s = _slug_score(qtok, u) + 0.5 * _bm25_score(qtok, doc_toks, idx)
             if s > 0:
@@ -288,14 +336,26 @@ class MoodleDocs:
         query: str,
         limit: int = 5,
         offset: int = 0,
+        version: str | None = None,
     ) -> list[DocHit]:
+        query = (query or "")[:MAX_QUERY_LEN]
+        t0 = time.monotonic()
         urls = await self._load_sitemap()
         if not urls:
             return []
         base_tokens = _tokenize(query)
         qtok = _expand_synonyms(base_tokens)
         phrases = _extract_phrases(query)
-        pool = self._candidates(qtok, limit + offset)
+
+        # Try Algolia fast-path first if configured.
+        algolia_hits = await self._algolia_recall(query, limit + offset, version)
+        if algolia_hits:
+            pool: list[tuple[float, str]] = [(h.score, h.url) for h in algolia_hits]
+            algolia_by_url = {h.url: h for h in algolia_hits}
+        else:
+            pool = self._candidates(qtok, limit + offset, version)
+            algolia_by_url = {}
+
         if offset:
             pool = pool[offset:]
         top = pool[:limit]
@@ -307,23 +367,59 @@ class MoodleDocs:
         )
         hits: list[DocHit] = []
         for (score, url), result in zip(top, excerpts, strict=False):
+            title: str
+            excerpt: str
+            headings: tuple[str, ...]
             if isinstance(result, BaseException):
                 title, excerpt, headings = "", "", ()
             else:
                 title, excerpt, headings = result
+            # Fall back to Algolia-provided excerpt/headings if page fetch was empty.
+            if not title and url in algolia_by_url:
+                title = algolia_by_url[url].title
+            if not excerpt and url in algolia_by_url:
+                excerpt = algolia_by_url[url].excerpt
+            if not headings and url in algolia_by_url:
+                headings = algolia_by_url[url].headings
             text_lower = (title + " " + excerpt).lower()
             bonus = 0.0
             for p in phrases:
                 if p and p in text_lower:
                     bonus += 4.0
+            reranked = rerank_score(
+                query,
+                title or _title_from_slug(url),
+                excerpt,
+                headings,
+                url,
+                score + bonus,
+            )
             hits.append(DocHit(
                 url=url,
                 title=title or _title_from_slug(url),
                 excerpt=excerpt,
-                score=score + bonus,
+                score=reranked,
                 headings=headings,
             ))
         hits.sort(key=lambda h: -h.score)
+        log.info(
+            "search %r -> %d hits in %.0fms (algolia=%s, version=%s)",
+            query, len(hits), (time.monotonic() - t0) * 1000,
+            bool(algolia_hits), version or "any",
+        )
+        return hits
+
+    async def _algolia_recall(
+        self, query: str, limit: int, version: str | None,
+    ) -> list[algolia.AlgoliaHit]:
+        if not algolia.available() or self._client is None:
+            return []
+        facets: list[str] | None = None
+        if version:
+            facets = [f"version:{version}"]
+        hits = await algolia.search(self._client, query, limit=limit, facet_filters=facets)
+        if version:
+            hits = [h for h in hits if _matches_version(h.url, version)]
         return hits
 
     async def fetch_page(self, url: str) -> tuple[str, str, tuple[str, ...]]:
@@ -340,6 +436,24 @@ class MoodleDocs:
         except (httpx.HTTPError, RuntimeError):
             return "", "", ()
         return extract_page(body, excerpt_len=excerpt_len)
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Parse Retry-After header — supports both delta-seconds and HTTP-date forms."""
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(value)
+        delta = (dt.timestamp() - time.time())
+        return max(0.0, delta)
+    except (TypeError, ValueError):
+        return None
 
 
 # ---- Pure helpers (no network) — easy to unit-test ----

@@ -4,8 +4,10 @@ Exposes Moodle documentation tools, resources, and prompts.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import re
 from typing import Any
 
 from mcp.server import Server
@@ -21,11 +23,14 @@ from mcp.types import (
 )
 from pydantic import AnyUrl
 
-from .docs import BASE_URL, MoodleDocs
+from .config import BASE_URL
+from .docs import MoodleDocs
 from .tools import (
+    tool_call_ws_function,
     tool_capability_docs,
     tool_fetch_page,
     tool_hooks_listeners,
+    tool_list_ws_functions,
     tool_plugin_types,
     tool_search_docs,
     tool_search_tracker,
@@ -35,24 +40,63 @@ from .tools import (
 
 log = logging.getLogger("moodle_mcp")
 
+# ToolAnnotations is only present on newer mcp SDKs; fall back to None.
+ToolAnnotations: Any
+try:  # pragma: no cover - import shim
+    from mcp.types import ToolAnnotations as _ToolAnnotations
+    ToolAnnotations = _ToolAnnotations
+except ImportError:  # pragma: no cover
+    ToolAnnotations = None
+
+
+def _annotations(*, read_only: bool, open_world: bool = True, destructive: bool = False) -> Any:
+    if ToolAnnotations is None:
+        return None
+    return ToolAnnotations(
+        readOnlyHint=read_only,
+        openWorldHint=open_world,
+        destructiveHint=destructive,
+    )
+
+
+_VERSION_RE = re.compile(r"^\d+\.\d+$")
+
+
+def _make_tool(
+    name: str, description: str, schema: dict[str, Any], *, read_only: bool = True,
+    destructive: bool = False,
+) -> Tool:
+    kwargs: dict[str, Any] = {
+        "name": name,
+        "description": description,
+        "inputSchema": schema,
+    }
+    ann = _annotations(read_only=read_only, destructive=destructive)
+    if ann is not None:
+        kwargs["annotations"] = ann
+    return Tool(**kwargs)
+
 
 TOOLS: list[Tool] = [
-    Tool(
-        name="search_moodle_docs",
-        description=(
+    _make_tool(
+        "search_moodle_docs",
+        (
             "Search the official Moodle developer documentation at moodledev.io. "
             "Returns top matching pages with title, URL, headings, and a short "
             "excerpt. Supports phrase matching with double quotes and synonym "
             "expansion (cap→capability, ws→webservice, hook↔listener, etc.). "
             "Use this for any API, plugin type, Hooks listener, capability, "
-            "XMLDB, web service, or developer-facing Moodle concept."
+            "XMLDB, web service, or developer-facing Moodle concept. "
+            "When MOODLE_DOCS_ALGOLIA_APP_ID and _API_KEY env vars are set, "
+            "uses Algolia DocSearch for higher-precision recall."
         ),
-        inputSchema={
+        {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
                     "description": 'Natural-language query. Quote phrases for exact match: \'add a "capability"\'.',
+                    "maxLength": 512,
                 },
                 "limit": {
                     "type": "integer", "minimum": 1, "maximum": 10, "default": 5,
@@ -62,46 +106,52 @@ TOOLS: list[Tool] = [
                     "type": "integer", "minimum": 0, "default": 0,
                     "description": "Skip this many top results — use for pagination.",
                 },
+                "version": {
+                    "type": "string",
+                    "description": "Restrict to a specific Moodle docs version (e.g. '4.4'). Omit for any.",
+                    "pattern": r"^\d+\.\d+$",
+                },
             },
             "required": ["query"],
         },
     ),
-    Tool(
-        name="fetch_moodle_page",
-        description=(
+    _make_tool(
+        "fetch_moodle_page",
+        (
             "Fetch a single moodledev.io page and return its full extracted "
             "body text + headings. Use after search_moodle_docs when you need "
             "the whole page, not the excerpt. Accepts absolute moodledev.io "
             "URLs or relative paths (e.g. /docs/apis/core/hooks)."
         ),
-        inputSchema={
+        {
             "type": "object",
             "properties": {
                 "url": {
                     "type": "string",
                     "description": "Absolute moodledev.io URL or path beginning with /docs/...",
+                    "maxLength": 2048,
                 },
             },
             "required": ["url"],
         },
     ),
-    Tool(
-        name="get_hooks_api_listeners",
-        description=(
+    _make_tool(
+        "get_hooks_api_listeners",
+        (
             "Return the Moodle core Hooks API index — known hook classes and "
             "where listeners are declared. Use when the user asks about hook "
             "callbacks, db/hooks.php, or which hooks are dispatched by core."
         ),
-        inputSchema={"type": "object", "properties": {}},
+        {"type": "object", "properties": {}},
     ),
-    Tool(
-        name="get_capability_docs",
-        description=(
+    _make_tool(
+        "get_capability_docs",
+        (
             "Look up Moodle capability/access API docs with a quick-reference "
             "card (db/access.php, has_capability, RISK_* bitmask). Optional "
             "component name (e.g. 'mod_quiz') focuses the search."
         ),
-        inputSchema={
+        {
             "type": "object",
             "properties": {
                 "component": {
@@ -111,56 +161,105 @@ TOOLS: list[Tool] = [
             },
         },
     ),
-    Tool(
-        name="lookup_db_xmldb",
-        description=(
+    _make_tool(
+        "lookup_db_xmldb",
+        (
             "Search Moodle XMLDB / database conventions — install.xml schema, "
             "field types (XMLDB_TYPE_*), upgrade.php patterns."
         ),
-        inputSchema={
+        {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
                     "description": "Field name, table, or concept — e.g. 'foreign key', 'XMLDB_TYPE_TEXT'.",
+                    "maxLength": 512,
                 },
             },
             "required": ["query"],
         },
     ),
-    Tool(
-        name="list_plugin_types",
-        description=(
+    _make_tool(
+        "list_plugin_types",
+        (
             "List all Moodle plugin types with one-line descriptions and a "
             "documentation URL when one exists in the sitemap."
         ),
-        inputSchema={"type": "object", "properties": {}},
+        {"type": "object", "properties": {}},
     ),
-    Tool(
-        name="get_version_info",
-        description=(
+    _make_tool(
+        "get_version_info",
+        (
             "Return current Moodle versions parsed from moodledev.io/general/releases — "
             "useful when checking $plugin->requires or LTS targets."
         ),
-        inputSchema={"type": "object", "properties": {}},
+        {"type": "object", "properties": {}},
     ),
-    Tool(
-        name="search_tracker",
-        description=(
+    _make_tool(
+        "search_tracker",
+        (
             "Search tracker.moodle.org (Jira) for issues matching the query. "
-            "Returns key, status, resolution, last-updated. Use when the user "
-            "asks about known bugs, MDL-XXXX tickets, or feature requests."
+            "Returns key, status, resolution, last-updated, and affected/fix "
+            "versions. Use when the user asks about known bugs, MDL-XXXX "
+            "tickets, or feature requests. Optional version filters scope the "
+            "search to a release."
         ),
-        inputSchema={
+        {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Free-text query."},
+                "query": {"type": "string", "description": "Free-text query.", "maxLength": 512},
                 "limit": {
                     "type": "integer", "minimum": 1, "maximum": 25, "default": 5,
+                },
+                "affects_version": {
+                    "type": "string",
+                    "description": "Jira affectedVersion name, e.g. '4.4'.",
+                },
+                "fix_version": {
+                    "type": "string",
+                    "description": "Jira fixVersion name, e.g. '4.4.2'.",
                 },
             },
             "required": ["query"],
         },
+    ),
+    _make_tool(
+        "list_ws_functions",
+        (
+            "List the Moodle Web Services functions available to the configured "
+            "instance token (via core_webservice_get_site_info). Requires "
+            "MOODLE_URL and MOODLE_TOKEN env vars. Read-only."
+        ),
+        {"type": "object", "properties": {}},
+    ),
+    _make_tool(
+        "call_ws_function",
+        (
+            "Call a Moodle Web Services function on the configured instance. "
+            "Requires MOODLE_URL and MOODLE_TOKEN env vars. The token's "
+            "capabilities determine what may be invoked; this tool itself "
+            "performs no privilege escalation. Many WS functions modify state — "
+            "review the function name before invoking."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "function": {
+                    "type": "string",
+                    "description": "WS function name, e.g. core_course_get_courses.",
+                    "pattern": r"^[a-z][a-z0-9_]+$",
+                    "maxLength": 128,
+                },
+                "args": {
+                    "type": "object",
+                    "description": "Function arguments. Nested dicts/lists are flattened to Moodle's bracketed-key form automatically.",
+                    "additionalProperties": True,
+                },
+            },
+            "required": ["function"],
+        },
+        read_only=False,
+        destructive=True,
     ),
 ]
 
@@ -230,6 +329,16 @@ def _wrap(payload: dict[str, Any]) -> list[TextContent]:
     ]
 
 
+async def _emit_progress(server: Server, progress: float, total: float | None = None) -> None:
+    """Best-effort progress notification. Silently noop when no request context."""
+    with contextlib.suppress(Exception):
+        ctx = server.request_context
+        token = ctx.meta.progressToken if ctx and ctx.meta else None
+        if token is None:
+            return
+        await ctx.session.send_progress_notification(token, progress, total)
+
+
 def build_server() -> tuple[Server, MoodleDocs]:
     server: Server = Server("moodle-mcp")
     docs = MoodleDocs()
@@ -242,28 +351,42 @@ def build_server() -> tuple[Server, MoodleDocs]:
     async def _call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         if docs._client is None:
             await docs.__aenter__()
+        log.info("tool %s called", name)
         try:
             if name == "search_moodle_docs":
-                query = arguments.get("query", "").strip()
+                query = (arguments.get("query") or "").strip()
                 if not query:
                     return [TextContent(type="text", text="Error: query is required.")]
-                return _wrap(await tool_search_docs(
+                version = arguments.get("version")
+                if version and not _VERSION_RE.match(str(version)):
+                    return [TextContent(
+                        type="text",
+                        text=f"Error: version must look like '4.4', got {version!r}.",
+                    )]
+                await _emit_progress(server, 0.0, 1.0)
+                result = await tool_search_docs(
                     docs, query,
                     limit=int(arguments.get("limit", 5)),
                     offset=int(arguments.get("offset", 0)),
-                ))
+                    version=version,
+                )
+                await _emit_progress(server, 1.0, 1.0)
+                return _wrap(result)
             if name == "fetch_moodle_page":
-                url = arguments.get("url", "").strip()
+                url = (arguments.get("url") or "").strip()
                 if not url:
                     return [TextContent(type="text", text="Error: url is required.")]
-                return _wrap(await tool_fetch_page(docs, url))
+                await _emit_progress(server, 0.0, 1.0)
+                result = await tool_fetch_page(docs, url)
+                await _emit_progress(server, 1.0, 1.0)
+                return _wrap(result)
             if name == "get_hooks_api_listeners":
                 return _wrap(await tool_hooks_listeners(docs))
             if name == "get_capability_docs":
                 comp = arguments.get("component")
                 return _wrap(await tool_capability_docs(docs, comp))
             if name == "lookup_db_xmldb":
-                q = arguments.get("query", "").strip()
+                q = (arguments.get("query") or "").strip()
                 if not q:
                     return [TextContent(type="text", text="Error: query is required.")]
                 return _wrap(await tool_xmldb(docs, q))
@@ -272,11 +395,23 @@ def build_server() -> tuple[Server, MoodleDocs]:
             if name == "get_version_info":
                 return _wrap(await tool_version_info(docs))
             if name == "search_tracker":
-                q = arguments.get("query", "").strip()
+                q = (arguments.get("query") or "").strip()
                 if not q:
                     return [TextContent(type="text", text="Error: query is required.")]
                 return _wrap(await tool_search_tracker(
-                    docs, q, limit=int(arguments.get("limit", 5)),
+                    docs, q,
+                    limit=int(arguments.get("limit", 5)),
+                    affects_version=arguments.get("affects_version"),
+                    fix_version=arguments.get("fix_version"),
+                ))
+            if name == "list_ws_functions":
+                return _wrap(await tool_list_ws_functions(docs))
+            if name == "call_ws_function":
+                fn = (arguments.get("function") or "").strip()
+                if not fn:
+                    return [TextContent(type="text", text="Error: function is required.")]
+                return _wrap(await tool_call_ws_function(
+                    docs, fn, arguments.get("args") or {},
                 ))
             raise ValueError(f"Unknown tool: {name}")
         except Exception as e:
