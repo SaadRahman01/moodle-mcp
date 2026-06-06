@@ -519,7 +519,28 @@ _ARTICLE_RE = re.compile(r"<article[^>]*>(.*?)</article>", re.IGNORECASE | re.DO
 def _strip(html_fragment: str) -> str:
     text = _SCRIPT_RE.sub(" ", html_fragment)
     text = _TAG_RE.sub(" ", text)
-    return _WS_RE.sub(" ", text).strip()
+    text = _WS_RE.sub(" ", text).strip()
+    return _sanitize_markdown(text)
+
+
+_FENCE_RE = re.compile(r"```+")
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def _sanitize_markdown(text: str) -> str:
+    """Neutralize markdown / prompt-injection vectors in extracted page text.
+
+    Excerpts are rendered inside a Markdown response; if a doc page were ever
+    compromised it could embed code fences or pseudo-system messages that
+    mislead the consuming model. Strip the obvious vectors.
+    """
+    text = _HTML_COMMENT_RE.sub("", text)
+    text = _FENCE_RE.sub("` ` `", text)
+    # Defang lines that look like role markers.
+    text = re.sub(
+        r"(?im)^\s*(system|assistant|user)\s*:", r"[\1]:", text,
+    )
+    return text
 
 
 def extract_page(html: str, excerpt_len: int = EXCERPT_LEN) -> tuple[str, str, tuple[str, ...]]:

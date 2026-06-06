@@ -201,3 +201,44 @@ async def test_tool_search_tracker_handles_failure(tmp_cache: DiskCache) -> None
         out = await tool_search_tracker(docs, "anything", limit=2)
     assert "failed" in out["markdown"].lower()
     assert "error" in out["data"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_tool_search_tracker_handles_429(tmp_cache: DiskCache) -> None:
+    respx.get("https://tracker.moodle.org/rest/api/2/search").mock(
+        return_value=httpx.Response(429, headers={"Retry-After": "60"})
+    )
+    async with MoodleDocs(cache=tmp_cache) as docs:
+        out = await tool_search_tracker(docs, "x", limit=2)
+    assert "failed" in out["markdown"].lower()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_tool_search_tracker_handles_401(tmp_cache: DiskCache) -> None:
+    respx.get("https://tracker.moodle.org/rest/api/2/search").mock(
+        return_value=httpx.Response(401, json={"errorMessages": ["unauthorized"]})
+    )
+    async with MoodleDocs(cache=tmp_cache) as docs:
+        out = await tool_search_tracker(docs, "x", limit=2)
+    assert "failed" in out["markdown"].lower()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_tool_search_tracker_with_version_filter(tmp_cache: DiskCache) -> None:
+    captured: dict = {}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"issues": []})
+
+    respx.get("https://tracker.moodle.org/rest/api/2/search").mock(side_effect=respond)
+    async with MoodleDocs(cache=tmp_cache) as docs:
+        await tool_search_tracker(
+            docs, "x", limit=2,
+            affects_version="4.4", fix_version="4.4.2",
+        )
+    assert "affectedVersion" in captured["url"]
+    assert "fixVersion" in captured["url"]

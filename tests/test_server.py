@@ -73,3 +73,18 @@ async def test_build_server_returns_server_and_docs(tmp_path) -> None:
         assert len(urls) == 2
     finally:
         await docs.aclose()
+
+
+def test_search_tool_schema_caps_query_length() -> None:
+    schema = next(t for t in TOOLS if t.name == "search_moodle_docs").inputSchema
+    assert schema["properties"]["query"]["maxLength"] == 512
+
+
+def test_call_ws_function_marked_destructive() -> None:
+    tool = next(t for t in TOOLS if t.name == "call_ws_function")
+    ann = tool.annotations
+    # Annotations are optional; skip if SDK doesn't carry them.
+    if ann is None:
+        pytest.skip("ToolAnnotations not in this mcp SDK")
+    assert ann.destructiveHint is True
+    assert ann.readOnlyHint is False

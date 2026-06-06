@@ -1,8 +1,22 @@
 """CLI entrypoint: `moodle-mcp` runs the stdio MCP server.
 
-Flags:
-  --version   print version and exit
-  --check     run a sitemap + sample page fetch, print diagnostics, exit
+Modes:
+  (default)        run the stdio MCP server, ready for Claude/Cursor/Continue.
+  --check          run a sitemap + sample-page fetch, print diagnostics, exit.
+  --clear-cache    delete the on-disk cache (~/.cache/moodle-mcp) and exit.
+
+Environment:
+  MOODLE_URL, MOODLE_TOKEN        — enable Moodle Web Services tools
+  MOODLE_DOCS_ALGOLIA_APP_ID/_API_KEY/_INDEX — Algolia DocSearch fast-path
+  MOODLE_MCP_PAGE_TTL             — page cache TTL in seconds (default 86400)
+  MOODLE_MCP_SITEMAP_TTL          — sitemap cache TTL (default 86400)
+  MOODLE_MCP_MAX_CONCURRENT       — fetch concurrency (default 6)
+  XDG_CACHE_HOME                  — override cache directory base
+
+Examples:
+  moodle-mcp --version
+  MOODLE_MCP_PAGE_TTL=3600 moodle-mcp
+  moodle-mcp --check --log-level DEBUG
 """
 from __future__ import annotations
 
@@ -13,17 +27,27 @@ import logging
 import sys
 
 from . import __version__
+from .cache import DiskCache, default_cache_dir
 from .docs import MoodleDocs
 from .server import run
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="moodle-mcp", description=__doc__)
+    p = argparse.ArgumentParser(
+        prog="moodle-mcp",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     p.add_argument("--version", action="version", version=f"moodle-mcp {__version__}")
     p.add_argument(
         "--check",
         action="store_true",
         help="Diagnostic mode — fetch the sitemap and a sample page, print result.",
+    )
+    p.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Delete the on-disk cache and exit.",
     )
     p.add_argument(
         "--log-level",
@@ -72,6 +96,13 @@ async def _diagnose() -> int:
         return 0
 
 
+def _clear_cache() -> int:
+    cache = DiskCache()
+    cache.clear()
+    print(f"cleared cache at {default_cache_dir()}")
+    return 0
+
+
 def main() -> None:
     args = _build_parser().parse_args()
     logging.basicConfig(
@@ -79,6 +110,8 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
+    if args.clear_cache:
+        sys.exit(_clear_cache())
     if args.check:
         sys.exit(asyncio.run(_diagnose()))
     with contextlib.suppress(KeyboardInterrupt):

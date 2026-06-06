@@ -15,12 +15,32 @@ TRACKER_BASE = "https://tracker.moodle.org"
 TRACKER_SEARCH = f"{TRACKER_BASE}/rest/api/2/search"
 USER_AGENT = "moodle-mcp/0.3 (+https://github.com/SaadRahman01/moodle-mcp)"
 
-DEFAULT_TIMEOUT = 15.0
+def _float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+DEFAULT_TIMEOUT = _float_env("MOODLE_MCP_TIMEOUT", 15.0)
 EXCERPT_LEN = 320
-PAGE_TTL = 7 * 86400.0
-SITEMAP_TTL = 86400.0
-MAX_CONCURRENT_FETCHES = 6
-MAX_RETRIES = 3
+PAGE_TTL = _float_env("MOODLE_MCP_PAGE_TTL", 86400.0)  # 1 day default (was 7)
+SITEMAP_TTL = _float_env("MOODLE_MCP_SITEMAP_TTL", 86400.0)
+MAX_CONCURRENT_FETCHES = _int_env("MOODLE_MCP_MAX_CONCURRENT", 6)
+MAX_RETRIES = _int_env("MOODLE_MCP_MAX_RETRIES", 3)
 MAX_QUERY_LEN = 512
 
 # Moodle instance WS settings — opt-in via env.

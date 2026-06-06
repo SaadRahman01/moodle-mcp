@@ -404,6 +404,20 @@ async def _emit_progress(server: Server, progress: float, total: float | None = 
         await ctx.session.send_progress_notification(token, progress, total)
 
 
+async def _emit_log(server: Server, level: str, message: str) -> None:
+    """Best-effort MCP logging/message notification. Silently noop without context."""
+    with contextlib.suppress(Exception):
+        ctx = server.request_context
+        if ctx is None:
+            return
+        await ctx.session.send_log_message(level=level, data=message)  # type: ignore[arg-type]
+
+
+def _new_request_id() -> str:
+    import secrets
+    return secrets.token_hex(4)
+
+
 def build_server() -> tuple[Server, MoodleDocs]:
     server: Server = Server("moodle-mcp")
     docs = MoodleDocs()
@@ -416,7 +430,9 @@ def build_server() -> tuple[Server, MoodleDocs]:
     async def _call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         if docs._client is None:
             await docs.__aenter__()
-        log.info("tool %s called", name)
+        rid = _new_request_id()
+        log.info("[%s] tool %s called", rid, name)
+        await _emit_log(server, "info", f"[{rid}] {name} started")
         try:
             if name == "search_moodle_docs":
                 query = (arguments.get("query") or "").strip()
@@ -480,7 +496,8 @@ def build_server() -> tuple[Server, MoodleDocs]:
                 ))
             raise ValueError(f"Unknown tool: {name}")
         except Exception as e:
-            log.exception("Tool %s failed", name)
+            log.exception("[%s] Tool %s failed", rid, name)
+            await _emit_log(server, "error", f"[{rid}] {name} failed: {e}")
             return [TextContent(type="text", text=f"Error in {name}: {e}")]
 
     @server.list_resources()
