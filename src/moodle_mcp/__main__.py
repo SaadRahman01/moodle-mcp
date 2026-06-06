@@ -35,6 +35,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 async def _diagnose() -> int:
+    from .docs import SITEMAP_URL, parse_sitemap
     async with MoodleDocs() as docs:
         try:
             urls = await docs._load_sitemap()
@@ -42,17 +43,32 @@ async def _diagnose() -> int:
             print(f"sitemap fetch FAILED: {e}", file=sys.stderr)
             return 2
         print(f"sitemap OK — {len(urls)} URLs cached")
-        if urls:
-            sample = urls[0]
+        if not urls:
+            print("WARNING: 0 URLs parsed — dumping raw sitemap.xml diagnostic:",
+                  file=sys.stderr)
             try:
-                title, excerpt, headings = await docs._fetch_excerpt(sample)
-                print(f"sample fetch OK — {sample}")
-                print(f"  title: {title or '(none)'}")
-                print(f"  headings: {len(headings)}")
-                print(f"  excerpt: {excerpt[:120]}...")
+                raw = await docs._get(SITEMAP_URL, ttl=0.0)
             except Exception as e:
-                print(f"sample fetch FAILED: {e}", file=sys.stderr)
-                return 3
+                print(f"  could not refetch sitemap: {e}", file=sys.stderr)
+                return 4
+            pages, children = parse_sitemap(raw)
+            print(f"  raw bytes: {len(raw)}", file=sys.stderr)
+            print(f"  first 400 chars: {raw[:400]!r}", file=sys.stderr)
+            print(f"  parsed pages: {len(pages)}  child sitemaps: {len(children)}",
+                  file=sys.stderr)
+            if children:
+                print(f"  child sitemap example: {children[0]}", file=sys.stderr)
+            return 4
+        sample = urls[0]
+        try:
+            title, excerpt, headings = await docs._fetch_excerpt(sample)
+            print(f"sample fetch OK — {sample}")
+            print(f"  title: {title or '(none)'}")
+            print(f"  headings: {len(headings)}")
+            print(f"  excerpt: {excerpt[:120]}...")
+        except Exception as e:
+            print(f"sample fetch FAILED: {e}", file=sys.stderr)
+            return 3
         return 0
 
 

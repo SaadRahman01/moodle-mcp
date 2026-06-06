@@ -177,7 +177,7 @@ class MoodleDocs:
     async def __aenter__(self) -> MoodleDocs:
         if self._client is None:
             self._client = httpx.AsyncClient(
-                headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip, br"},
+                headers={"User-Agent": USER_AGENT},
                 timeout=DEFAULT_TIMEOUT,
                 follow_redirects=True,
                 http2=True,
@@ -344,20 +344,51 @@ class MoodleDocs:
 
 # ---- Pure helpers (no network) — easy to unit-test ----
 
+_LOC_RE = re.compile(r"<loc>\s*([^<\s][^<]*?)\s*</loc>", re.IGNORECASE)
+
+
 def parse_sitemap(xml_text: str) -> tuple[list[str], list[str]]:
-    """Return (page_urls, child_sitemap_urls) declared in a sitemap.xml document."""
+    """Return (page_urls, child_sitemap_urls) declared in a sitemap.xml document.
+
+    Tries XML parsing with the standard sitemap namespace first; falls back to
+    a regex pass for sitemaps that ship without a namespace or with non-standard
+    prefixes. Distinguishes <sitemapindex> from <urlset> by root tag.
+    """
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError:
-        return [], []
+        # No XML namespace — try plain regex extraction.
+        all_locs = [m.strip() for m in _LOC_RE.findall(xml_text) if m.strip()]
+        if "<sitemapindex" in xml_text.lower():
+            return [], all_locs
+        return all_locs, []
+    tag = root.tag.lower()
+    is_index = tag.endswith("sitemapindex")
+    is_urlset = tag.endswith("urlset")
     pages: list[str] = []
     sitemaps: list[str] = []
+    # Namespaced lookups
     for loc in root.findall("sm:url/sm:loc", SITEMAP_NS):
         if loc.text:
             pages.append(loc.text.strip())
     for loc in root.findall("sm:sitemap/sm:loc", SITEMAP_NS):
         if loc.text:
             sitemaps.append(loc.text.strip())
+    # Fallback for documents that drop the xmlns
+    if not pages and not sitemaps:
+        for loc in root.iter():
+            if loc.tag.lower().endswith("loc") and loc.text:
+                target = sitemaps if is_index else pages
+                target.append(loc.text.strip())
+        if not pages and not sitemaps:
+            # Last resort: regex over the raw text.
+            all_locs = [m.strip() for m in _LOC_RE.findall(xml_text) if m.strip()]
+            if is_index:
+                sitemaps.extend(all_locs)
+            elif is_urlset:
+                pages.extend(all_locs)
+            else:
+                pages.extend(all_locs)
     return pages, sitemaps
 
 

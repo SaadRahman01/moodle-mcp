@@ -77,6 +77,37 @@ def test_parse_sitemap_handles_malformed_xml() -> None:
     assert sitemaps == []
 
 
+def test_parse_sitemap_without_namespace() -> None:
+    xml = """<?xml version="1.0"?>
+<urlset>
+  <url><loc>https://moodledev.io/docs/a</loc></url>
+  <url><loc>https://moodledev.io/docs/b</loc></url>
+</urlset>"""
+    pages, sitemaps = parse_sitemap(xml)
+    assert pages == ["https://moodledev.io/docs/a", "https://moodledev.io/docs/b"]
+    assert sitemaps == []
+
+
+def test_parse_sitemap_index_without_namespace() -> None:
+    xml = """<?xml version="1.0"?>
+<sitemapindex>
+  <sitemap><loc>https://moodledev.io/sitemap-0.xml</loc></sitemap>
+</sitemapindex>"""
+    pages, sitemaps = parse_sitemap(xml)
+    assert pages == []
+    assert sitemaps == ["https://moodledev.io/sitemap-0.xml"]
+
+
+def test_parse_sitemap_regex_fallback_on_unparseable_with_locs() -> None:
+    junk = (
+        "garbage prefix <loc>https://moodledev.io/x</loc> "
+        "more garbage <loc>https://moodledev.io/y</loc>"
+    )
+    pages, sitemaps = parse_sitemap(junk)
+    assert "https://moodledev.io/x" in pages
+    assert "https://moodledev.io/y" in pages
+
+
 def test_extract_title_strips_suffix_and_chrome() -> None:
     title, excerpt = extract_title_and_excerpt(PAGE_HTML)
     assert title == "Access API — capabilities"
