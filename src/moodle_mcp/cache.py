@@ -5,6 +5,7 @@ TTL-based invalidation, atomic writes, safe to share across processes.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -86,15 +87,11 @@ class DiskCache:
                 json.dump(payload, f)
             os.replace(tmp_name, path)
         except Exception:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp_name)
-            except OSError:
-                pass
             raise
 
     def clear(self) -> None:
         for p in self.root.glob("*.json"):
-            try:
+            with contextlib.suppress(OSError):
                 p.unlink()
-            except OSError:
-                pass

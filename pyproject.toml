@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "moodle-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "Model Context Protocol server for Moodle development — search moodledev.io docs from Claude, Cursor, Continue, or any MCP client."
 readme = "README.md"
 license = { text = "MIT" }
@@ -27,8 +27,9 @@ classifiers = [
   "Topic :: Software Development :: Documentation",
 ]
 dependencies = [
-  "mcp>=1.0.0",
-  "httpx>=0.27",
+  "mcp>=1.0.0,<2.0",
+  "httpx[http2]>=0.27,<1.0",
+  "pydantic>=2.0",
 ]
 
 [project.optional-dependencies]
