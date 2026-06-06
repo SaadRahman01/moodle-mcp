@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "moodle-mcp"
+version = "0.1.0"
+description = "Model Context Protocol server for Moodle development — search moodledev.io docs from Claude, Cursor, Continue, or any MCP client."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+  { name = "Saad Rahman", email = "saad.rahman010@gmail.com" }
+]
+requires-python = ">=3.10"
+keywords = [
+  "moodle", "moodle-plugin", "mcp", "model-context-protocol",
+  "claude", "cursor", "continue", "ai", "lms", "edtech"
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Documentation",
+]
+dependencies = [
+  "mcp>=1.0.0",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7",
+  "pytest-asyncio>=0.23",
+  "respx>=0.21",
+  "ruff>=0.5",
+]
+
+[project.scripts]
+moodle-mcp = "moodle_mcp.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/SaadRahman01/moodle-mcp"
+Repository = "https://github.com/SaadRahman01/moodle-mcp"
+Issues = "https://github.com/SaadRahman01/moodle-mcp/issues"
+Companion = "https://github.com/SaadRahman01/claude-moodle-dev"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/moodle_mcp"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
