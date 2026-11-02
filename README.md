@@ -10,7 +10,7 @@ Companion to [`claude-moodle-dev`](https://github.com/SaadRahman01/claude-moodle
 
 ## What you get
 
-Ten MCP tools, hardened to survive site redesigns:
+Eleven MCP tools, hardened to survive site redesigns:
 
 | Tool | Purpose |
 |------|---------|
@@ -23,6 +23,7 @@ Ten MCP tools, hardened to survive site redesigns:
 | `get_version_info()` | Current Moodle versions parsed from `/general/releases`. |
 | `search_tracker(query, limit=5, affects_version?, fix_version?)` | Issue search against `tracker.moodle.org` (Jira), now with version filters. |
 | `list_ws_functions()` | List Moodle Web Services functions available to the configured instance token. Requires `MOODLE_URL` + `MOODLE_TOKEN`. |
+| `list_upcoming_deadlines(days=30, overdue_days=7, limit=50)` | Read-only list of your pending activities (Dashboard timeline): due date, course, activity, link, overdue flag. Requires `MOODLE_URL` + `MOODLE_TOKEN`. |
 | `call_ws_function(function, args)` | Invoke a Moodle WS function against a real instance. SSRF-guarded, function-name allowlisted, refuses private/loopback hosts unless explicitly overridden. |
 
 Plus MCP **resources** (`moodle://docs/apis/...` for one-click page reads), **prompts** (`moodle-plugin-skeleton`, `moodle-capability-review`, `moodle-hooks-migration`, `explain-capability`, `find-endpoint`, `explain-plugin-type`, `xmldb-upgrade`, `diagnose-mdl`), **tool annotations** (`readOnlyHint`, `destructiveHint`) for client safety, and **progress notifications** during multi-fetch searches.
