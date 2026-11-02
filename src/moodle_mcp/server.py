@@ -34,6 +34,7 @@ from .tools import (
     tool_plugin_types,
     tool_search_docs,
     tool_search_tracker,
+    tool_upcoming_deadlines,
     tool_version_info,
     tool_xmldb,
 )
@@ -231,6 +232,41 @@ TOOLS: list[Tool] = [
             "MOODLE_URL and MOODLE_TOKEN env vars. Read-only."
         ),
         {"type": "object", "properties": {}},
+    ),
+    _make_tool(
+        "list_upcoming_deadlines",
+        (
+            "List the user's pending Moodle activities (assignments, quizzes, "
+            "etc.) from the Dashboard timeline: due date, course, activity and "
+            "link. Includes recently overdue items still awaiting action. "
+            "Requires MOODLE_URL and MOODLE_TOKEN env vars. Read-only."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "How many days ahead to look.",
+                    "default": 30,
+                    "minimum": 1,
+                    "maximum": 365,
+                },
+                "overdue_days": {
+                    "type": "integer",
+                    "description": "How many days back to include overdue items (0 = none).",
+                    "default": 7,
+                    "minimum": 0,
+                    "maximum": 365,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum items returned (paged 50 at a time).",
+                    "default": 50,
+                    "minimum": 1,
+                    "maximum": 200,
+                },
+            },
+        },
     ),
     _make_tool(
         "call_ws_function",
@@ -487,6 +523,13 @@ def build_server() -> tuple[Server, MoodleDocs]:
                 ))
             if name == "list_ws_functions":
                 return _wrap(await tool_list_ws_functions(docs))
+            if name == "list_upcoming_deadlines":
+                return _wrap(await tool_upcoming_deadlines(
+                    docs,
+                    days=int(arguments.get("days", 30)),
+                    overdue_days=int(arguments.get("overdue_days", 7)),
+                    limit=int(arguments.get("limit", 50)),
+                ))
             if name == "call_ws_function":
                 fn = (arguments.get("function") or "").strip()
                 if not fn:

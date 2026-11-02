@@ -7,6 +7,8 @@ both human-readable and structured payloads.
 from __future__ import annotations
 
 import re
+import time
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
@@ -422,6 +424,120 @@ async def tool_call_ws_function(
     }
 
 
+# ---- list_upcoming_deadlines ----
+
+_DAY = 86400
+_TIMELINE_PAGE = 50  # Moodle caps limitnum at 50 per call
+_DEADLINES_MAX = 200
+
+
+async def tool_upcoming_deadlines(
+    docs: MoodleDocs,
+    days: int = 30,
+    overdue_days: int = 7,
+    limit: int = 50,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Pending activities from the user's Moodle timeline (read-only).
+
+    Wraps core_calendar_get_action_events_by_timesort — the same source as
+    the Dashboard "Timeline" block, so only items still actionable by the
+    token's user (e.g. assignments not yet submitted) are returned. Pages
+    through results with `aftereventid` when `limit` exceeds one page.
+    """
+    if not ws.configured():
+        return {
+            "markdown": (
+                "Moodle WS not configured. Set `MOODLE_URL` and `MOODLE_TOKEN` "
+                "environment variables to enable."
+            ),
+            "data": {"error": "not-configured"},
+        }
+    assert docs._client is not None
+    days = max(1, min(int(days), 365))
+    overdue_days = max(0, min(int(overdue_days), 365))
+    limit = max(1, min(int(limit), _DEADLINES_MAX))
+    now_ts = int(now if now is not None else time.time())
+    args: dict[str, Any] = {
+        "timesortfrom": now_ts - overdue_days * _DAY,
+        "timesortto": now_ts + days * _DAY,
+        "limittononsuspendedevents": True,
+    }
+    raw: list[dict[str, Any]] = []
+    truncated = False
+    try:
+        while len(raw) < limit:
+            page_size = min(_TIMELINE_PAGE, limit - len(raw))
+            payload = await ws.call(
+                docs._client,
+                "core_calendar_get_action_events_by_timesort",
+                {**args, "limitnum": page_size},
+            )
+            page = (payload.get("events") if isinstance(payload, dict) else None) or []
+            raw.extend(page)
+            last_id = payload.get("lastid") if isinstance(payload, dict) else None
+            if len(page) < page_size or not last_id or last_id == args.get("aftereventid"):
+                break
+            args["aftereventid"] = last_id
+        else:
+            truncated = True
+    except (ws.WSConfigError, ws.WSCallError) as e:
+        return {
+            "markdown": f"WS error: {e}",
+            "data": {"error": str(e)},
+        }
+    events = [_deadline_from_event(ev, now_ts) for ev in raw[:limit]]
+    events.sort(key=lambda d: d["timesort"])
+    if not events:
+        return {
+            "markdown": (
+                f"No pending deadlines in the next {days} day(s) "
+                f"(or overdue in the last {overdue_days})."
+            ),
+            "data": {"deadlines": []},
+        }
+    md = ["# Upcoming Moodle deadlines", ""]
+    md.append(f"**{len(events)}** pending item(s).")
+    md.append("")
+    md.append("| Due | Course | Activity | Status |")
+    md.append("| --- | --- | --- | --- |")
+    for d in events:
+        due = datetime.fromtimestamp(d["timesort"]).astimezone().strftime("%a %Y-%m-%d %H:%M")
+        activity = _md_cell(d["name"])
+        if d["url"]:
+            activity = f"[{activity}]({d['url']})"
+        status = "**overdue**" if d["overdue"] else _md_cell(d["action"])
+        md.append(f"| {due} | {_md_cell(d['course'])} | {activity} | {status} |")
+    if truncated:
+        md.append(f"\n_(limit of {limit} reached — narrow `days` or raise `limit`)_")
+    return {
+        "markdown": "\n".join(md),
+        "data": {"deadlines": events, "truncated": truncated},
+    }
+
+
+def _deadline_from_event(ev: dict[str, Any], now_ts: int) -> dict[str, Any]:
+    course = ev.get("course") or {}
+    action = ev.get("action") or {}
+    timesort = int(ev.get("timesort") or ev.get("timestart") or 0)
+    return {
+        "id": ev.get("id"),
+        "name": ev.get("activityname") or ev.get("name") or "?",
+        "event": ev.get("name") or "",
+        "module": ev.get("modulename") or "",
+        "course": course.get("fullname") or course.get("shortname") or "",
+        "timesort": timesort,
+        "due": datetime.fromtimestamp(timesort, tz=timezone.utc).isoformat(),
+        "overdue": bool(ev.get("overdue", timesort < now_ts)),
+        "action": action.get("name") or "",
+        "url": ev.get("url") or "",
+    }
+
+
+def _md_cell(text: str) -> str:
+    return text.replace("|", "\\|").replace("\n", " ").strip()
+
+
 def _summarize_ws_payload(payload: Any) -> str:
     if payload is None:
         return "_null_"
@@ -445,4 +561,5 @@ __all__ = [
     "tool_search_tracker",
     "tool_list_ws_functions",
     "tool_call_ws_function",
+    "tool_upcoming_deadlines",
 ]

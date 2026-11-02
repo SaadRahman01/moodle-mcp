@@ -102,3 +102,22 @@ async def test_dispatch_ws_tool_unconfigured(tmp_path: Path) -> None:
         await docs.aclose()
     text = result.root.content[0].text
     assert "not configured" in text.lower() or "Moodle WS" in text
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_dispatch_upcoming_deadlines_unconfigured(tmp_path: Path) -> None:
+    """list_upcoming_deadlines returns a friendly error when env not set."""
+    from unittest.mock import patch
+
+    from moodle_mcp import ws
+
+    server, docs = build_server()
+    docs._cache = DiskCache(tmp_path / "c", default_ttl=60.0)
+    try:
+        with patch.object(ws, "MOODLE_URL", ""), patch.object(ws, "MOODLE_TOKEN", ""):
+            result = await _dispatch(server, docs, "list_upcoming_deadlines", {"days": 7})
+    finally:
+        await docs.aclose()
+    text = result.root.content[0].text
+    assert "not configured" in text.lower()
